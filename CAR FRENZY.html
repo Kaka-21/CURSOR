@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head> <title> CAR FRENZY</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script> 
+    <script>  const game = document.getElementById("game-container"); 
+        function openGame() {   game.style.display="block"; } document.title='CAR FRENZY'; </script>
+    <meta charset="UTF-8"> 
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CAR FRENZY</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: black; color:#87CEEB; }
+
+        #game-info {
+            position: fixed; top: 10px; left: 10px; color: black;
+            background: #87CEEB; padding: 10px; border-radius: 5px;
+            font-size: 18px; font-weight: bold;
+
+        }
+
+        .srt {color: black;
+            background: #87CEEB; margin-top: 15px; border-radius: 5px;
+            font-size: 18px; font-weight: bold; padding: 12px; margin-left: 16px; }
+        #fire-button {
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: #87CEEB; padding: 15px; border-radius: 50%;
+            cursor: pointer; display: flex; justify-content: center; align-items: center;
+        }
+
+        svg { width: 50px; height: 50px; } 
+         .b { font-weight: bold; font-size:x-large; 
+        margin-left: 450px; padding-top: 15px; } 
+        #game-conainer { display:none; }
+    </style>
+</head>
+<body> 
+    <div class="b"> CLICK THE BUTTON TO START GAME</div> 
+    
+<button class="srt"> START GAME</button>
+<div id="game-container"> 
+<div id="game-info">Score: 0</div>
+
+<!-- SVG Fire Button -->
+<div id="fire-button"> 
+    <svg viewBox="0 0 64 64">
+        <circle cx="32" cy="32" r="30" fill="orange" />
+        <polygon points="32,10 38,40 32,50 26,40" fill="red" />
+    </svg> 
+</div>
+
+<script> 
+    // Scene Setup
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // Road Background
+    const roadGeometry = new THREE.PlaneGeometry(100, 500);
+    const roadMaterial = new THREE.MeshBasicMaterial({ color: 'grey' });
+    const road = new THREE.Mesh(roadGeometry, roadMaterial);
+    road.rotation.x = -Math.PI / 2;
+    scene.add(road); 
+
+   /* const pilLar = [];
+     const pillars = new THREE.Group();
+    const itemPillar = new THREE.BoxGeometry(250, 500, 1);
+    const pillarMaterial = new THREE.MeshBasicMaterial({ color: 'black' });
+    const pillar = new THREE.Mesh(itemPillar, pillarMaterial);
+    // road.rotation.x = -Math.PI / 2;
+     pillar.position.y = 10; 
+     pillars.add(pillar);
+    scene.add(pillar);
+     pillars.position.set(1, 2, 5); */
+
+    // Player Car (Stationary)
+    const playerCar = new THREE.Group();
+    const bodyGeometry = new THREE.BoxGeometry(5, 3, 4);
+    const bodyMaterial = new THREE.MeshBasicMaterial({ color: 0x008080 });
+    const carBody = new THREE.Mesh(bodyGeometry, bodyMaterial);
+    carBody.position.y = 2;
+    playerCar.add(carBody);
+
+    // Player Car Tires
+    const tireGeometry = new THREE.CylinderGeometry(0.4, 0.4, 0.5, 32);
+    const tireMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
+    const tirePositions = [
+        [-0.9, 0.4, 1.5], [0.9, 0.4, 1.5], // Front
+        [-0.10, 0.8, -1.5], [0.10, 0.8, -1.5] // Rear
+    ];
+
+    const playerTires = tirePositions.map(pos => {
+        const tire = new THREE.Mesh(tireGeometry, tireMaterial);
+        tire.rotation.z = Math.PI / 2;
+        tire.position.set(...pos);
+        playerCar.add(tire);
+        return tire;
+    });
+
+    scene.add(playerCar);
+    playerCar.position.set(0, 0.5, 42);  // Stationary
+
+    camera.position.set(0, 15, 60);
+    camera.lookAt(1, 2, 3); 
+
+    // Score System
+    let score = 0;
+    const scoreDisplay = document.getElementById('game-info');
+    function updateScore(points) {
+        score += points;
+        scoreDisplay.innerText = `Score: ${score}`;
+    }
+
+    
+    // Move Car (Click Controls)
+    document.addEventListener('click', (event) => {
+        const midPoint = window.innerWidth / 2;
+        if (event.clientX < midPoint) {
+            playerCar.position.x -= 1;  // Move Left
+        } else {
+            playerCar.position.x += 1;  // Move Right
+        }
+    });
+
+    // Fire Bullet
+    document.getElementById('fire-button').addEventListener('click', () => {
+        const bulletGeometry = new THREE.SphereGeometry(0.2, 8, 8);
+        const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+        const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
+
+        bullet.position.set(
+            playerCar.position.x,
+            playerCar.position.y + 1,
+            playerCar.position.z - 2
+        );
+        scene.add(bullet);
+
+        const bulletSpeed = 2;
+
+        function animateBullet() {
+            bullet.position.z -= bulletSpeed;
+
+            // Check for collision
+            for (let i = opponents.length - 1; i >= 0; i--) {
+                const opponent = opponents[i];
+                if (bullet.position.distanceTo(opponent.position) < 1.5) {
+                    scene.remove(opponent);
+                    scene.remove(bullet);
+                    opponents.splice(i, 1);
+                    updateScore(10);
+                    return; // Stop bullet animation
+                }
+            }
+
+            if (bullet.position.z > -150) {
+                requestAnimationFrame(animateBullet);
+            } else {
+                scene.remove(bullet);
+            }
+        }
+
+        animateBullet();
+    });
+
+    // Opponent Cars
+    const opponents = [];
+    function createOpponent() {
+        const opponent = new THREE.Group();
+        const oppBodyGeometry = new THREE.BoxGeometry(2, 1, 4);
+        const oppBodyMaterial = new THREE.MeshBasicMaterial({ color:  0xff0000  });
+        const oppCarBody = new THREE.Mesh(oppBodyGeometry, oppBodyMaterial);
+        oppCarBody.position.y = 2;
+        opponent.add(oppCarBody);
+
+        tirePositions.forEach(pos => {
+            const tire = new THREE.Mesh(tireGeometry, tireMaterial);
+            tire.rotation.z = Math.PI / 2;
+            tire.position.set(...pos);
+            opponent.add(tire);
+        });
+
+        opponent.position.set(Math.random() * 10 *  2, 0.5, -150);
+        scene.add(opponent);
+        opponents.push(opponent);
+    }
+
+    setInterval(createOpponent, 4000); // Every 4 seconds
+
+    // Animation Loop
+    function animate() {
+        requestAnimationFrame(animate);
+
+        // Move opponents
+        for (let i = opponents.length - 1; i >= 0; i--) {
+            const opponent = opponents[i];
+            opponent.position.z += 0.3;
+
+            if (opponent.position.z > 50) {
+                scene.remove(opponent);
+                opponents.splice(i, 1);
+            }
+        }
+
+        // Rotate player tires
+        playerTires.forEach(tire => tire.rotation.x -= 0.1);
+
+        // Rotate opponent tires
+        opponents.forEach(opponent => {
+            opponent.children.forEach(child => {
+                if (child.geometry && child.geometry.type === "CylinderGeometry") {
+                    child.rotation.x -= 0.1;
+                }
+            });
+        });
+
+        renderer.render(scene, camera);
+    }
+
+    animate();
+
+    // Responsive Resize
+    window.addEventListener('resize', () => {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        renderer.setSize(width, height);
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+    });  
+
+</script> 
+</div>
+</body>
+</html>
