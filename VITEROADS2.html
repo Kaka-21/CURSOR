@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Viteroads (Improved)</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: #000;
+        }
+        #game-canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        #config-menu {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.85);
+            color: white;
+            padding: 32px;
+            border-radius: 10px;
+            text-align: center;
+            width: 340px;
+            z-index: 20;
+            box-shadow: 0 6px 30px rgba(0,0,0,0.6);
+        }
+        #config-menu h1 {
+            color: #fff;
+            margin-top: 0;
+            margin-bottom: 14px;
+            font-size: 22px;
+        }
+        #config-menu .option-group {
+            margin-bottom: 14px;
+            text-align: left;
+        }
+        #config-menu label {
+            display: block;
+            margin-bottom: 6px;
+            color: #ccc;
+            font-size: 13px;
+        }
+        #config-menu input, #config-menu select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #444;
+            border-radius: 6px;
+            background-color: #222;
+            color: white;
+            box-sizing: border-box;
+            font-size: 13px;
+        }
+        #start-button {
+            padding: 12px 18px;
+            border: none;
+            border-radius: 6px;
+            background-color: #1db954;
+            color: white;
+            font-size: 15px;
+            cursor: pointer;
+            width: 100%;
+            transition: background-color 0.18s;
+        }
+        #start-button:hover { background-color: #17a14a; }
+
+        /* HUD */
+        #hud {
+            position: absolute;
+            left: 16px;
+            top: 16px;
+            color: #fff;
+            z-index: 30;
+            font-size: 13px;
+            background: rgba(0,0,0,0.35);
+            padding: 12px 14px;
+            border-radius: 8px;
+            min-width: 160px;
+        }
+        #hud .speed {
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: 1px;
+        }
+        #hud .small { opacity: 0.8; font-size: 12px; }
+
+        /* Skid canvas overlay */
+        #skid-canvas {
+            position: absolute;
+            left: 0;
+            top: 0;
+            z-index: 15;
+            pointer-events: none;
+        }
+
+        /* small tip */
+        #tips {
+            position: absolute;
+            right: 16px;
+            bottom: 16px;
+            z-index: 30;
+            color: rgba(255,255,255,0.85);
+            font-size: 12px;
+            background: rgba(0,0,0,0.35);
+            padding: 8px 10px;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="config-menu">
+        <h1>Viteroads</h1>
+
+        <div class="option-group">
+            <label for="seed">World Seed</label>
+            <input type="text" id="seed" value="endless-zen">
+        </div>
+
+        <div class="option-group">
+            <label for="complexity">Road Complexity</label>
+            <select id="complexity">
+                <option value="0.6">Casual</option>
+                <option value="1.0" selected>Normal</option>
+                <option value="1.6">Hard</option>
+                <option value="2.0">Extreme</option>
+            </select>
+        </div>
+
+        <div class="option-group">
+            <label for="timeOfDay">Time of Day</label>
+            <select id="timeOfDay">
+                <option value="Morning">Morning</option>
+                <option value="Midday" selected>Midday</option>
+                <option value="Evening">Evening</option>
+                <option value="Night">Night</option>
+            </select>
+        </div>
+
+        <button id="start-button">Drive</button>
+    </div>
+
+    <canvas id="game-canvas"></canvas>
+    <canvas id="skid-canvas"></canvas>
+
+    <div id="hud" style="display:none;">
+        <div class="speed" id="hud-speed">0 km/h</div>
+        <div class="small" id="hud-gear">Gear: N</div>
+        <div class="small" id="hud-status">Status: Idle</div>
+    </div>
+
+    <div id="tips" style="display:none;">
+        <div>W/S or ↑/↓ : Throttle / Brake</div>
+        <div>A/D or ←/→ : Steer</div>
+        <div>Space: Handbrake (drift) &nbsp; Shift: Boost &nbsp; E: Assist</div>
+    </div>
+
+    <!-- Import Three.js from a CDN -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.157.0/build/three.module.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        /* ----------------------------
+           Helper: Seeded PRNG (Mulberry32)
+           ---------------------------- */
+        function hashStringToInt(str) {
+            // simple 32-bit FNV-1a
+            let h = 2166136261 >>> 0;
+            for (let i = 0; i < str.length; i++) {
+                h ^= str.charCodeAt(i);
+                h = Math.imul(h, 16777619) >>> 0;
+            }
+            return h >>> 0;
+        }
+        function mulberry32(seed) {
+            return function() {
+                let t = seed += 0x6D2B79F5;
+                t = Math.imul(t ^ t >>> 15, t | 1);
+                t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+                return ((t ^ t >>> 14) >>> 0) / 4294967296;
+            };
+        }
+
+        /* ----------------------------
+           Simple value-noise for terrain
+           ---------------------------- */
+        function createNoise(prng) {
+            // grid size 256
+            const size = 256;
+            const values = new Float32Array(size * size);
+            for (let y = 0; y < size; y++) {
+                for (let x = 0; x < size; x++) {
+                    values[y*size+x] = prng();
+                }
+            }
+            function smoothstep(a) { return a * a * (3 - 2 * a); }
+            function sample(u, v) {
+                const x = Math.abs(u % 1) * (size - 1);
+                const y = Math.abs(v % 1) * (size - 1);
+                const xi = Math.floor(x), yi = Math.floor(y);
+                const xf = x - xi, yf = y - yi;
+                const a = values[yi*size + xi];
+                const b = values[yi*size + ((xi+1)%size)];
+                const c = values[((yi+1)%size)*size + xi];
+                const d = values[((yi+1)%size)*size + ((xi+1)%size)];
+                const ox = smoothstep(xf);
+                const oy = smoothstep(yf);
+                const ab = a * (1-ox) + b * ox;
+                const cd = c * (1-ox) + d * ox;
+                return ab * (1-oy) + cd * oy;
+            }
+            return { sample };
+        }
+
+        /* ----------------------------
+           Main game class
+           ---------------------------- */
+        class ViteroadsGame {
+            constructor(config) {
+                this.config = config;
+                this.prng = mulberry32(hashStringToInt(config.seed.toString()));
+                this.noise = createNoise(this.prng);
+
+                this.scene = new THREE.Scene();
+                this.camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.1, 30000);
+                this.canvas = document.getElementById('game-canvas');
+                this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: false });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+                this.renderer.shadowMap.enabled = true;
+                this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                this.renderer.setClearColor(0x000000);
+
+                this.clock = new THREE.Clock();
+
+                // basic vehicle and world placeholders
+                this.vehicle = null;
+                this.terrain = null;
+                this.road = null;
+                this.roadPath = null;
+                this.controls = { forward: false, backward: false, left: false, right: false, handbrake: false, boost: false, assist: true };
+
+                this.hud = document.getElementById('hud');
+                this.hudSpeed = document.getElementById('hud-speed');
+                this.hudGear = document.getElementById('hud-gear');
+                this.hudStatus = document.getElementById('hud-status');
+                this.tips = document.getElementById('tips');
+
+                this.skidCanvas = document.getElementById('skid-canvas');
+                this.skidCtx = this.skidCanvas.getContext('2d');
+                this.resizeOverlay();
+
+                this.init();
+            }
+
+            resizeOverlay() {
+                this.skidCanvas.width = window.innerWidth;
+                this.skidCanvas.height = window.innerHeight;
+            }
+
+            init() {
+                this.setupEnvironment();
+                this.setupTerrainAndRoad();
+                this.setupVehicle();
+                this.setupLights();
+                this.setupControls();
+                this.hud.style.display = 'block';
+                this.tips.style.display = 'block';
+                this.animate();
+
+                window.addEventListener('resize', () => {
+                    this.camera.aspect = window.innerWidth / window.innerHeight;
+                    this.camera.updateProjectionMatrix();
+                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+                    this.resizeOverlay();
+                });
+            }
+
+            setupEnvironment() {
+                const timeOfDay = {
+                    'Morning': { sky: 0x87CEEB, light: 0xFFF5E6, sun: new THREE.Vector3(400, 800, -200) },
+                    'Midday': { sky: 0x87CEFF, light: 0xFFFFFF, sun: new THREE.Vector3(0, 1200, 0) },
+                    'Evening': { sky: 0xFF8C6B, light: 0xFFD6B6, sun: new THREE.Vector3(-600, 400, 600) },
+                    'Night': { sky: 0x02021a, light: 0x6b7bff, sun: new THREE.Vector3(0, -1000, 0) }
+                }[this.config.timeOfDay];
+
+                this.scene.background = new THREE.Color(timeOfDay.sky);
+                this.scene.fog = new THREE.Fog(timeOfDay.sky, 100, 4000);
+
+                this.ambient = new THREE.HemisphereLight(0xffffff, 0x444455, 0.5);
+                this.scene.add(this.ambient);
+                this.sun = new THREE.DirectionalLight(timeOfDay.light, 1.0);
+                this.sun.position.copy(timeOfDay.sun);
+                this.sun.castShadow = true;
+                this.sun.shadow.camera.left = -1500;
+                this.sun.shadow.camera.right = 1500;
+                this.sun.shadow.camera.top = 1500;
+                this.sun.shadow.camera.bottom = -1500;
+                this.sun.shadow.mapSize.set(2048, 2048);
+                this.scene.add(this.sun);
+            }
+
+            setupTerrainAndRoad() {
+                // terrain
+                const terrainSize = 20000;
+                const segments = 256;
+                const planeGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, segments, segments);
+                const positions = planeGeo.attributes.position;
+                for (let i = 0; i < positions.count; i++) {
+                    const x = positions.getX(i) / 20000; // normalized to sample noise
+                    const y = positions.getY(i) / 20000;
+                    const n = this.noise.sample((x + 0.5) * 3, (y + 0.5) * 3);
+                    const h = (n - 0.5) * 40; // +-20 meters terrain variance
+                    positions.setZ(i, h);
+                }
+                planeGeo.computeVertexNormals();
+                const terrainMat = new THREE.MeshStandardMaterial({ color: 0x3b6b2c, roughness: 1.0, metalness: 0.0 });
+                this.terrain = new THREE.Mesh(planeGeo, terrainMat);
+                this.terrain.receiveShadow = true;
+                this.terrain.rotation.x = -Math.PI / 2;
+                this.terrain.position.y = -10;
+                this.scene.add(this.terrain);
+
+                // Road generation: sample smooth curve using CatmullRom
+                const points = [];
+                const pointCount = 300;
+                let last = new THREE.Vector3(0, 12, 0);
+                for (let i = 0; i < pointCount; i++) {
+                    const forward = -200 - (i * 6); // mostly forward
+                    const lateral = (this.prng() - 0.5) * 100 * this.config.complexity;
+                    const vertical = (this.prng() - 0.5) * 10;
+                    const np = new THREE.Vector3(lateral, vertical, forward);
+                    // smooth with last
+                    np.add(last.clone().multiplyScalar(0.15));
+                    points.push(np);
+                    last = np;
+                }
+                this.roadPath = new THREE.CatmullRomCurve3(points, false, 'catmullrom', 0.5);
+
+                // Road mesh (wide flattened tube)
+                const roadSegments = pointCount * 6;
+                const roadWidth = 12;
+                // create a ribbon by extruding a shape along path
+                const shape = new THREE.Shape();
+                const half = roadWidth / 2;
+                shape.moveTo(-half, 0);
+                shape.lineTo(half, 0);
+
+                const extrudeSettings = { steps: roadSegments, extrudePath: this.roadPath };
+                const roadGeometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+                roadGeometry.rotateX(-Math.PI / 2);
+                roadGeometry.computeVertexNormals();
+                const roadMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.7 });
+                this.road = new THREE.Mesh(roadGeometry, roadMat);
+                this.road.receiveShadow = true;
+                this.scene.add(this.road);
+
+                // lane markings: create thin textured plane following the path
+                const markingsGeometry = new THREE.BufferGeometry();
+                const seg = 600;
+                const positionsMark = new Float32Array(seg * 3);
+                const uvs = new Float32Array(seg * 2);
+                for (let i = 0; i < seg; i++) {
+                    const t = i / (seg - 1);
+                    const p = this.roadPath.getPointAt(t);
+                    positionsMark[i*3+0] = p.x;
+                    positionsMark[i*3+1] = p.y + 0.1;
+                    positionsMark[i*3+2] = p.z;
+                    uvs[i*2] = t * 10;
+                    uvs[i*2+1] = 0;
+                }
+                markingsGeometry.setAttribute('position', new THREE.BufferAttribute(positionsMark, 3));
+                markingsGeometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+                const markingsMat = new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 6, gapSize: 6, linewidth: 2 });
+                const markings = new THREE.Line(markingsGeometry, markingsMat);
+                markings.computeLineDistances();
+                this.scene.add(markings);
+
+                // Build a fast sample array for nearest point queries
+                this.roadSamples = [];
+                const sampleCount = 1200;
+                for (let i = 0; i < sampleCount; i++) {
+                    const t = i / (sampleCount - 1);
+                    const p = this.roadPath.getPointAt(t);
+                    const dir = this.roadPath.getTangentAt(t);
+                    this.roadSamples.push({ t, p, dir });
+                }
+            }
+
+            setupLights() {
+                // Additional fill lights and subtle effects
+                const fill = new THREE.DirectionalLight(0xffffff, 0.15);
+                fill.position.set(-300, 200, 200);
+                this.scene.add(fill);
+            }
+
+            setupVehicle() {
+                // Build a simple car with chassis and 4 wheels
+                const chassis = new THREE.Group();
+                const bodyGeo = new THREE.BoxGeometry(2.4, 0.9, 4.4);
+                const bodyMat = new THREE.MeshStandardMaterial({ color: 0xff2f2f, metalness: 0.2, roughness: 0.4 });
+                const body = new THREE.Mesh(bodyGeo, bodyMat);
+                body.castShadow = true;
+                body.position.y = 1.0;
+                chassis.add(body);
+
+                // roof
+                const roof = new THREE.BoxGeometry(1.6, 0.55, 2.2);
+                const roofMesh = new THREE.Mesh(roof, new THREE.MeshStandardMaterial({ color: 0x222222 }));
+                roofMesh.position.set(0, 1.35, -0.25);
+                roofMesh.castShadow = true;
+                chassis.add(roofMesh);
+
+                // wheels
+                this.wheels = [];
+                const wheelGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.4, 18);
+                const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9, metalness: 0.1 });
+                const wheelOffsets = [
+                    new THREE.Vector3(1.0, 0.4, -1.5),  // front-right
+                    new THREE.Vector3(-1.0, 0.4, -1.5), // front-left
+                    new THREE.Vector3(1.0, 0.4, 1.5),   // rear-right
+                    new THREE.Vector3(-1.0, 0.4, 1.5)   // rear-left
+                ];
+                for (let i = 0; i < 4; i++) {
+                    const w = new THREE.Mesh(wheelGeo, wheelMat);
+                    w.rotation.z = Math.PI / 2;
+                    w.castShadow = true;
+                    w.position.copy(wheelOffsets[i]);
+                    this.wheels.push(w);
+                    chassis.add(w);
+                }
+
+                // headlights & brake lights
+                const headL = new THREE.SpotLight(0xffffff, this.config.timeOfDay === 'Night' ? 6 : 2, 1800, Math.PI/8, 0.4);
+                headL.position.set(0.8, 0.55, -2.4);
+                headL.target.position.set(0.8, 0.55, -10);
+                chassis.add(headL);
+                chassis.add(headL.target);
+
+                const headR = new THREE.SpotLight(0xffffff, this.config.timeOfDay === 'Night' ? 6 : 2, 1800, Math.PI/8, 0.4);
+                headR.position.set(-0.8, 0.55, -2.4);
+                headR.target.position.set(-0.8, 0.55, -10);
+                chassis.add(headR);
+                chassis.add(headR.target);
+
+                // brake lights as emissive planes
+                const brakeMat = new THREE.MeshBasicMaterial({ color: 0x660000 });
+                const brakeGeo = new THREE.PlaneGeometry(0.35, 0.15);
+                const bl1 = new THREE.Mesh(brakeGeo, brakeMat.clone());
+                bl1.position.set(0.6, 0.7, 2.3); bl1.rotation.y = Math.PI;
+                const bl2 = new THREE.Mesh(brakeGeo, brakeMat.clone());
+                bl2.position.set(-0.6, 0.7, 2.3); bl2.rotation.y = Math.PI;
+                chassis.add(bl1, bl2);
+                this.brakeLights = [bl1.material, bl2.material];
+
+                // initial position on road
+                const startP = this.roadPath.getPointAt(0.02);
+                chassis.position.copy(startP);
+                // orient to path tangent
+                const tangent = this.roadPath.getTangentAt(0.02);
+                const look = new THREE.Vector3().copy(tangent).add(new THREE.Vector3(0,0,0));
+                chassis.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,-1), tangent.normalize());
+
+                chassis.userData = {
+                    speed: 0,
+                    steering: 0,
+                    wheelAngle: 0,
+                    velocity: new THREE.Vector3(),
+                    suspension: 0
+                };
+
+                this.vehicle = chassis;
+                this.scene.add(this.vehicle);
+            }
+
+            setupControls() {
+                document.addEventListener('keydown', (e) => {
+                    this.updateKey(e.key, true);
+                });
+                document.addEventListener('keyup', (e) => {
+                    this.updateKey(e.key, false);
+                });
+            }
+            updateKey(key, down) {
+                switch (key.toLowerCase()) {
+                    case 'w': case 'arrowup': this.controls.forward = down; break;
+                    case 's': case 'arrowdown': this.controls.backward = down; break;
+                    case 'a': case 'arrowleft': this.controls.left = down; break;
+                    case 'd': case 'arrowright': this.controls.right = down; break;
+                    case ' ': this.controls.handbrake = down; break;
+                    case 'shift': this.controls.boost = down; break;
+                    case 'e': if (!down) this.controls.assist = !this.controls.assist; break;
+                }
+            }
+
+            findClosestRoadSample(position) {
+                // simple linear search (fast enough for ~1200 samples)
+                let best = null;
+                let bestDist = Infinity;
+                for (let i = 0; i < this.roadSamples.length; i++) {
+                    const s = this.roadSamples[i];
+                    const d = s.p.distanceToSquared(position);
+                    if (d < bestDist) {
+                        bestDist = d;
+                        best = s;
+                    }
+                }
+                return best;
+            }
+
+            updateVehicle(dt) {
+                const d = this.vehicle.userData;
+                const maxSpeed = 260;
+                const accel = 120 * (this.controls.boost ? 1.6 : 1.0);
+                const brakeForce = 220;
+                const drag = 0.985; // simple slow-down
+                const steerSpeed = 2.4;
+                const maxSteer = 0.75; // radians
+                const grip = this.controls.handbrake ? 0.6 : 0.92; // lower grip when handbrake
+
+                // Steering input
+                let steeringInput = 0;
+                if (this.controls.left) steeringInput = 1;
+                if (this.controls.right) steeringInput = -1;
+
+                // Speed sensitive steering (less responsive at higher speed)
+                const speedFactor = 1 - Math.min(Math.abs(d.speed) / maxSpeed, 0.9);
+                const effectiveSteer = maxSteer * (0.7 + 0.3 * speedFactor);
+
+                // adjust steering smoothly
+                d.steering += (steeringInput * effectiveSteer - d.steering) * Math.min(steerSpeed * dt, 1);
+
+                // Engine/brake
+                if (this.controls.forward) d.speed += accel * dt;
+                if (this.controls.backward) d.speed -= brakeForce * dt;
+                // automatic friction when not pressing throttle
+                if (!this.controls.forward && !this.controls.backward) d.speed *= drag;
+
+                // clamp speed
+                d.speed = Math.max(-maxSpeed/2, Math.min(maxSpeed, d.speed));
+
+                // lateral dynamics (very simplified)
+                // velocity vector based on forward direction
+                const forwardVec = new THREE.Vector3(0, 0, -1).applyQuaternion(this.vehicle.quaternion);
+                // apply a small lateral slip depending on steering and grip
+                const lateral = new THREE.Vector3(forwardVec.z, 0, -forwardVec.x).multiplyScalar(d.steering * Math.abs(d.speed) * 0.0025 * (1 - grip));
+                // forward movement
+                const forwardMotion = forwardVec.clone().multiplyScalar(d.speed * dt * (this.controls.boost ? 1.12 : 1.0));
+
+                // combine
+                d.velocity.add(forwardMotion).add(lateral);
+
+                // limit lateral component to simulate grip
+                const lateralComponent = new THREE.Vector3(d.velocity.x, 0, d.velocity.z).projectOnVector(forwardVec.clone().cross(new THREE.Vector3(0,1,0)).cross(forwardVec)).length();
+                // apply damping to lateral velocity based on grip
+                d.velocity.multiplyScalar(0.999 - (1 - grip) * 0.3);
+
+                // Simple ground/snap to road: find nearest point on road and nudge toward it
+                const sample = this.findClosestRoadSample(this.vehicle.position);
+                if (sample) {
+                    // compute heading from tangent
+                    const targetPos = sample.p.clone();
+                    // Keep vehicle y above the road slightly
+                    const desiredY = targetPos.y + 1.0;
+                    // vertically smooth
+                    this.vehicle.position.y += (desiredY - this.vehicle.position.y) * Math.min(dt * 8, 1);
+
+                    // steering assist (automatically correct heading based on road)
+                    if (this.controls.assist) {
+                        // compute forward heading and target heading
+                        const targetDir = sample.dir.clone().normalize();
+                        const currentDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.vehicle.quaternion).normalize();
+                        // small correction proportional to steering and speed
+                        const correction = currentDir.angleTo(targetDir);
+                        // decide sign via cross
+                        const cross = currentDir.clone().cross(targetDir).y;
+                        const sign = cross < 0 ? -1 : 1;
+                        // apply small rotation towards target depending on speed
+                        const assistStrength = Math.min(Math.abs(d.speed) / 200, 1.0) * 0.6;
+                        const apply = sign * correction * assistStrength;
+                        this.vehicle.rotateY(apply * dt * 2.0);
+                    }
+                }
+
+                // position update
+                this.vehicle.position.add(d.velocity);
+
+                // rotational update: turn vehicle orientation based on steering and speed
+                const turnAmount = d.steering * (d.speed / 60) * dt * 1.2;
+                this.vehicle.rotation.y += turnAmount;
+
+                // suspension bob based on speed & bumps
+                d.suspension = Math.sin(this.clock.getElapsedTime() * 8) * 0.02 * Math.min(1, Math.abs(d.speed)/80);
+                this.vehicle.position.y += d.suspension;
+
+                // wheels rotation & steering visuals
+                for (let i = 0; i < this.wheels.length; i++) {
+                    const w = this.wheels[i];
+                    // front wheels steer
+                    if (i < 2) {
+                        // front-left and front-right rotate around Y for steering angle
+                        const steerAngle = d.steering * 0.45; // visual multiplier
+                        w.rotation.y = steerAngle;
+                    }
+                    // spin wheels according to forward speed
+                    w.rotation.x += (d.speed / 2.0) * dt;
+                }
+
+                // tail/brake lights brightness
+                const braking = this.controls.backward || this.controls.handbrake;
+                for (let m of this.brakeLights) {
+                    m.color = new THREE.Color(braking ? 0xff3300 : 0x220000);
+                }
+
+                // skid marks drawing
+                if (this.controls.handbrake && Math.abs(d.speed) > 40) {
+                    this.drawSkid(this.vehicle.position);
+                }
+
+                // small clamp to avoid runaway velocity
+                d.velocity.multiplyScalar(0.999 - Math.min(Math.abs(d.speed)/8000, 0.0006));
+
+                // update HUD values
+                this.hudSpeed.innerText = `${Math.round(Math.abs(d.speed))} km/h`;
+                this.hudGear.innerText = `Gear: ${d.speed > 0 ? 'D' : (d.speed < 0 ? 'R' : 'N')}`;
+                this.hudStatus.innerText = `Status: ${this.controls.handbrake ? 'Handbrake / Drifting' : (this.controls.boost ? 'Boost' : (this.controls.forward ? 'Driving' : 'Coasting'))}`;
+            }
+
+            drawSkid(worldPos) {
+                // convert 3D world position to 2D screen coords
+                const pos = worldPos.clone();
+                pos.project(this.camera);
+                const x = (pos.x * 0.5 + 0.5) * this.skidCanvas.width;
+                const y = ( - pos.y * 0.5 + 0.5) * this.skidCanvas.height;
+                this.skidCtx.fillStyle = 'rgba(20,20,20,0.25)';
+                this.skidCtx.beginPath();
+                this.skidCtx.ellipse(x + (Math.random()-0.5)*6, y + (Math.random()-0.5)*6, 4 + Math.random()*3, 1.5 + Math.random()*1.5, 0, 0, Math.PI*2);
+                this.skidCtx.fill();
+                // fade slowly
+                // we implement fade in render loop, not here.
+            }
+
+            fadeSkidCanvas() {
+                this.skidCtx.fillStyle = 'rgba(0,0,0,0.02)';
+                this.skidCtx.fillRect(0,0,this.skidCanvas.width,this.skidCanvas.height);
+            }
+
+            updateCamera(dt) {
+                // smooth chase camera with spring
+                const desiredOffset = new THREE.Vector3(0, 5, 12).applyQuaternion(this.vehicle.quaternion);
+                const desiredPos = this.vehicle.position.clone().add(desiredOffset);
+                // lerp camera position
+                this.camera.position.lerp(desiredPos, Math.min(dt * 4.0, 1));
+                // look slightly ahead
+                const lookAhead = new THREE.Vector3(0, 1.5, -14).applyQuaternion(this.vehicle.quaternion).add(this.vehicle.position);
+                this.camera.lookAt(lookAhead);
+            }
+
+            animate() {
+                requestAnimationFrame(this.animate.bind(this));
+                const dt = Math.min(this.clock.getDelta(), 0.05);
+
+                if (this.vehicle) {
+                    this.updateVehicle(dt);
+                    this.updateCamera(dt);
+                }
+
+                // fade skid marks overlay slightly each frame
+                this.fadeSkidCanvas();
+
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+
+        // --- Event Listener to Start the Game ---
+        document.getElementById('start-button').addEventListener('click', () => {
+            const config = {
+                seed: document.getElementById('seed').value || 'default-seed',
+                complexity: parseFloat(document.getElementById('complexity').value),
+                timeOfDay: document.getElementById('timeOfDay').value,
+            };
+
+            document.getElementById('config-menu').style.display = 'none';
+            new ViteroadsGame(config);
+        });
+
+    </script>
+</body>
+</html>
