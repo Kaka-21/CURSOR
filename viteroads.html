@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Viteroads</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: #000;
+        }
+        #game-canvas {
+            display: block;
+        }
+        #config-menu {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 40px;
+            border-radius: 10px;
+            text-align: center;
+            width: 320px;
+            z-index: 10;
+        }
+        #config-menu h1 {
+            color: #fff;
+            margin-top: 0;
+        }
+        #config-menu .option-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+        #config-menu label {
+            display: block;
+            margin-bottom: 5px;
+            color: #ccc;
+        }
+        #config-menu input, #config-menu select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #555;
+            border-radius: 5px;
+            background-color: #333;
+            color: white;
+            box-sizing: border-box; /* Ensures padding doesn't affect width */
+        }
+        #start-button {
+            padding: 15px 30px;
+            border: none;
+            border-radius: 5px;
+            background-color: #4CAF50;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+            transition: background-color 0.3s;
+        }
+        #start-button:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="config-menu">
+        <h1>Viteroads</h1>
+
+        <div class="option-group">
+            <label for="seed">World Seed</label>
+            <input type="text" id="seed" value="endless-zen">
+        </div>
+
+        <div class="option-group">
+            <label for="complexity">Road Complexity</label>
+            <select id="complexity">
+                <option value="0.5">Casual</option>
+                <option value="1.0" selected>Normal</option>
+                <option value="1.5">Hard</option>
+            </select>
+        </div>
+        
+        <div class="option-group">
+            <label for="timeOfDay">Time of Day</label>
+            <select id="timeOfDay">
+                <option value="Morning">Morning</option>
+                <option value="Midday" selected>Midday</option>
+                <option value="Evening">Evening</option>
+                <option value="Night">Night</option>
+            </select>
+        </div>
+
+        <button id="start-button">Drive</button>
+    </div>
+
+    <canvas id="game-canvas"></canvas>
+
+    <!-- Import Three.js from a CDN -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.157.0/build/three.module.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // --- ALEA PRNG (Pseudo-Random Number Generator) ---
+        // A self-contained Alea PRNG implementation.
+        function Alea(seed) {
+            let s0 = 0, s1 = 0, s2 = 0, c = 1;
+            if (seed == null) seed = +new Date;
+            s0 = (seed >>> 0) * 0x9e3779b9;
+            s1 = seed * 0x9e3779b9;
+            s2 = seed * 0x9e3779b9;
+            for (let i = 0; i < 4; ++i) {
+                s0 = (s0 & 0xffff) * 0x21f0aaad + (s0 >>> 16) * 0x21f0aaad << 16;
+                s1 = (s1 & 0xffff) * 0x21f0aaad + (s1 >>> 16) * 0x21f0aaad << 16;
+                s2 = (s2 & 0xffff) * 0x21f0aaad + (s2 >>> 16) * 0x21f0aaad << 16;
+            }
+            return function() {
+                const t = (s0 & 0xffff) * 0x2091680d + (s0 >>> 16) * 0x2091680d << 16;
+                s0 = s1; s1 = s2;
+                return s2 = (s2 ^ c ^ t) >>> 0;
+            };
+        }
+
+        class ViteroadsGame {
+            constructor(config) {
+                this.config = config;
+                this.prng = this.seedablePRNG(this.config.seed);
+                
+                // Core Three.js components
+                this.scene = new THREE.Scene();
+                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 15000);
+                this.renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('game-canvas'), antialias: true });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.setClearColor(0x000000);
+                this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+
+                // Game components
+                this.clock = new THREE.Clock();
+                this.vehicle = null;
+                this.terrain = null;
+                this.road = null;
+                this.controls = { forward: false, backward: false, left: false, right: false };
+
+                this.init();
+            }
+
+            // Simple string-to-number seeder
+            seedablePRNG(seed) {
+                let h = 1779033703, i, c;
+                for (i = 0, c = seed.length; i < c; i++) {
+                    h = Math.imul(h ^ seed.charCodeAt(i), 3432918353);
+                }
+                return Alea(h);
+            }
+
+            init() {
+                this.setupEnvironment();
+                this.setupTerrainAndRoad();
+                this.setupVehicle();
+                this.setupControls();
+
+                this.animate();
+
+                window.addEventListener('resize', () => {
+                    this.camera.aspect = window.innerWidth / window.innerHeight;
+                    this.camera.updateProjectionMatrix();
+                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+                });
+            }
+
+            setupEnvironment() {
+                const timeOfDay = {
+                    'Morning': { sky: 0x87CEEB, light: 0xFFFAD7, sun: [500, 500, -500] },
+                    'Midday': { sky: 0x00BFFF, light: 0xFFFFFF, sun: [0, 1000, 0] },
+                    'Evening': { sky: 0xFF7F50, light: 0xFFDAB9, sun: [-500, 300, 500] },
+                    'Night': { sky: 0x000033, light: 0x555577, sun: [0, -1000, 0] }
+                }[this.config.timeOfDay];
+
+                this.scene.background = new THREE.Color(timeOfDay.sky);
+                this.scene.fog = new THREE.Fog(timeOfDay.sky, 50, 2000);
+
+                const ambient = new THREE.AmbientLight(0xffffff, 0.3);
+                this.scene.add(ambient);
+
+                this.sun = new THREE.DirectionalLight(timeOfDay.light, 1.0);
+                this.sun.position.set(...timeOfDay.sun);
+                this.scene.add(this.sun);
+            }
+
+            setupTerrainAndRoad() {
+                // Terrain generation
+                const terrainSize = 20000;
+                const segments = 100;
+                const terrainGeometry = new THREE.PlaneGeometry(terrainSize, terrainSize, segments, segments);
+                const vertices = terrainGeometry.attributes.position.array;
+                // Basic noise-like variation from PRNG
+                for (let i = 2; i < vertices.length; i += 3) {
+                    vertices[i] = (this.prng() / 0xffffffff) * 20 - 10;
+                }
+                terrainGeometry.computeVertexNormals();
+                const terrainMaterial = new THREE.MeshStandardMaterial({ color: 0x6b8e23, flatShading: true });
+                this.terrain = new THREE.Mesh(terrainGeometry, terrainMaterial);
+                this.terrain.rotation.x = -Math.PI / 2;
+                this.scene.add(this.terrain);
+
+                // Road generation
+                const points = [];
+                let lastPoint = new THREE.Vector3(0, 0, 0);
+                for (let i = 0; i < 200; i++) {
+                    const direction = new THREE.Vector3(
+                        (this.prng() / 0xffffffff - 0.5) * this.config.complexity * 100, 
+                        0, 
+                        -150 // Move forward
+                    );
+                    const newPoint = new THREE.Vector3().addVectors(lastPoint, direction);
+                    points.push(newPoint);
+                    lastPoint = newPoint;
+                }
+                this.roadPath = new THREE.CatmullRomCurve3(points);
+
+                const roadGeometry = new THREE.TubeGeometry(this.roadPath, points.length * 4, 8, 16, false);
+                const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x444444 });
+                this.road = new THREE.Mesh(roadGeometry, roadMaterial);
+                this.road.position.y = 0.5; // Lift slightly above terrain
+                this.scene.add(this.road);
+            }
+            
+            setupVehicle() {
+                const carBody = new THREE.Mesh(
+                    new THREE.BoxGeometry(2, 0.8, 4),
+                    new THREE.MeshStandardMaterial({ color: 0xff0000 })
+                );
+                const carTop = new THREE.Mesh(
+                    new THREE.BoxGeometry(1.8, 0.6, 2.5),
+                    new THREE.MeshStandardMaterial({ color: 0x333333 })
+                );
+                carTop.position.y = 0.7;
+                carTop.position.z = -0.2;
+
+                this.vehicle = new THREE.Group();
+                this.vehicle.add(carBody);
+                this.vehicle.add(carTop);
+                
+                // Add headlights for night
+                if(this.config.timeOfDay === 'Night') {
+                    const headLight1 = new THREE.SpotLight(0xffffff, 10, 100, Math.PI / 6, 0.5);
+                    headLight1.position.set(0.8, 0.5, -2);
+                    const headLight2 = new THREE.SpotLight(0xffffff, 10, 100, Math.PI / 6, 0.5);
+                    headLight2.position.set(-0.8, 0.5, -2);
+                    this.vehicle.add(headLight1, headLight1.target);
+                    this.vehicle.add(headLight2, headLight2.target);
+                }
+
+                this.scene.add(this.vehicle);
+                
+                // Physics properties
+                this.vehicle.velocity = new THREE.Vector3();
+                this.vehicle.userData.speed = 0;
+                this.vehicle.userData.steering = 0;
+
+                // Raycaster for ground detection
+                this.raycaster = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0, -1, 0), 0, 5);
+            }
+
+            setupControls() {
+                document.addEventListener('keydown', (e) => this.updateKeyState(e.key, true));
+                document.addEventListener('keyup', (e) => this.updateKeyState(e.key, false));
+            }
+
+            updateKeyState(key, isPressed) {
+                switch (key.toLowerCase()) {
+                    case 'w': case 'arrowup': this.controls.forward = isPressed; break;
+                    case 's': case 'arrowdown': this.controls.backward = isPressed; break;
+                    case 'a': case 'arrowleft': this.controls.left = isPressed; break;
+                    case 'd': case 'arrowright': this.controls.right = isPressed; break;
+                }
+            }
+
+            updateVehicle(deltaTime) {
+                const maxSpeed = 100;
+                const acceleration = 30.0;
+                const friction = 0.98;
+                const steeringSpeed = 1.5;
+                const maxSteer = 0.5;
+
+                // Steering
+                if (this.controls.left) this.vehicle.userData.steering += steeringSpeed * deltaTime;
+                else if (this.controls.right) this.vehicle.userData.steering -= steeringSpeed * deltaTime;
+                else this.vehicle.userData.steering *= 0.9; // Auto-center steering
+                this.vehicle.userData.steering = Math.max(-maxSteer, Math.min(maxSteer, this.vehicle.userData.steering));
+
+                // Acceleration/Braking
+                if (this.controls.forward) this.vehicle.userData.speed += acceleration * deltaTime;
+                else if (this.controls.backward) this.vehicle.userData.speed -= acceleration * 1.5 * deltaTime;
+                else this.vehicle.userData.speed *= friction;
+                this.vehicle.userData.speed = Math.max(-maxSpeed / 2, Math.min(maxSpeed, this.vehicle.userData.speed));
+                
+                // Don't allow turning when stationary
+                if (Math.abs(this.vehicle.userData.speed) > 0.1) {
+                    this.vehicle.rotation.y += this.vehicle.userData.steering * (this.vehicle.userData.speed / maxSpeed) * deltaTime;
+                }
+
+                // Update velocity vector based on speed and direction
+                this.vehicle.velocity.set(0, 0, -this.vehicle.userData.speed * deltaTime).applyQuaternion(this.vehicle.quaternion);
+                this.vehicle.position.add(this.vehicle.velocity);
+                
+                // Ground detection (simplified physics)
+                this.raycaster.set(this.vehicle.position, new THREE.Vector3(0, -1, 0));
+                const intersects = this.raycaster.intersectObject(this.terrain);
+                if (intersects.length > 0) {
+                    const groundHeight = intersects[0].point.y;
+                    this.vehicle.position.y = groundHeight + 1.0;
+                } else {
+                    // Fall if off terrain (simple gravity)
+                    this.vehicle.position.y -= 9.8 * deltaTime;
+                }
+            }
+            
+            updateCamera() {
+                const offset = new THREE.Vector3(0, 5, 12);
+                offset.applyQuaternion(this.vehicle.quaternion);
+                this.camera.position.lerp(this.vehicle.position.clone().add(offset), 0.1);
+                
+                const lookAtTarget = new THREE.Vector3().copy(this.vehicle.position);
+                lookAtTarget.z -= 10;
+                lookAtTarget.applyQuaternion(this.vehicle.quaternion);
+                this.camera.lookAt(lookAtTarget);
+            }
+            
+            animate() {
+                requestAnimationFrame(this.animate.bind(this));
+                const deltaTime = this.clock.getDelta();
+                
+                if (this.vehicle) {
+                    this.updateVehicle(deltaTime);
+                    this.updateCamera();
+                }
+
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+
+        // --- Event Listener to Start the Game ---
+        document.getElementById('start-button').addEventListener('click', () => {
+            const config = {
+                seed: document.getElementById('seed').value,
+                complexity: parseFloat(document.getElementById('complexity').value),
+                timeOfDay: document.getElementById('timeOfDay').value,
+            };
+
+            document.getElementById('config-menu').style.display = 'none';
+            new ViteroadsGame(config);
+        });
+
+    </script>
+</body>
+</html>
